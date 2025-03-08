@@ -15,7 +15,7 @@ private:
     void updateTheta();
     void initializeTheta();
     float* computeGradient();
-    float mseError();
+    float mse();
 
 private:
     int m_TrainingSize;
