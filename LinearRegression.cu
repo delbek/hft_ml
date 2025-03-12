@@ -1,18 +1,21 @@
 #include "LinearRegression.h"
 #include <random>
 #include <omp.h>
+#include <iostream>
 
-LinearRegression::LinearRegression(int trainingSize, int numFeatures, float* trainingData, float* trainingLabels, float convergenceThreshold, float learningRate)
+LinearRegression::LinearRegression(int trainingSize, int numFeatures, double* trainingData, double* trainingLabels, 
+                                double convergenceThreshold, double learningRate, int maxIterations)
 :
     m_ConvergenceThreshold(convergenceThreshold), 
     m_LearningRate(learningRate),
     m_TrainingSize(trainingSize),
     m_NumFeatures(numFeatures),
     m_TrainingData(trainingData),
-    m_TrainingLabels(trainingLabels)
+    m_TrainingLabels(trainingLabels),
+    m_MaxIterations(maxIterations)
 {
-    m_Theta = new float[numFeatures];
-    m_LastPredictions = new float[trainingSize];
+    m_Theta = new double[m_NumFeatures + 1];
+    m_LastPredictions = new double[m_TrainingSize];
 }
 
 LinearRegression::~LinearRegression()
@@ -23,88 +26,102 @@ LinearRegression::~LinearRegression()
 
 void LinearRegression::initializeTheta()
 {
-    for (int i = 0; i < m_NumFeatures; ++i)
+    for (int j = 0; j < m_NumFeatures; ++j)
     {
-        m_Theta[i] = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+        m_Theta[j] = 0;
     }
+    m_Theta[m_NumFeatures] = 0;
 }
 
 void LinearRegression::fit()
 {
+    int iteration = 0;
     initializeTheta();
-    float error = mse();
-    while (error > m_ConvergenceThreshold)
+    double error = mse();
+    std::cout << "Initial MSE: " << error << std::endl;
+    while (error > m_ConvergenceThreshold && iteration < m_MaxIterations)
     {
         updateTheta();
         error = mse();
+        ++iteration;
     }
+    std::cout << "Final MSE: " << error << std::endl;
 }
 
-float LinearRegression::predict(float* x)
+double LinearRegression::predict(double* x)
 {
-    float prediction = 0.0f;
-    for (int i = 0; i < m_NumFeatures; ++i)
+    double prediction = 0;
+    for (int j = 0; j < m_NumFeatures; ++j)
     {
-        prediction += m_Theta[i] * x[i];
+        prediction += m_Theta[j] * x[j];
     }
+    prediction += m_Theta[m_NumFeatures];
     return prediction;
 }
 
 void LinearRegression::updateTheta()
 {
-    float* gradient = computeGradient();
-    for (int i = 0; i < m_NumFeatures; ++i)
+    double* gradient = computeGradient();
+    for (int j = 0; j < m_NumFeatures; ++j)
     {
-        m_Theta[i] -= m_LearningRate * gradient[i];
+        m_Theta[j] -= m_LearningRate * gradient[j];
     }
+    m_Theta[m_NumFeatures] -= m_LearningRate * gradient[m_NumFeatures];
     delete[] gradient;
 }
 
-float LinearRegression::mse()
+double LinearRegression::mse()
 {
-    float error = 0.0f;
-    #pragma omp parallel for reduction(+:error) schedule(static) num_threads(omp_get_max_threads())
+    double error = 0;
+    #pragma omp parallel for reduction(+:error) schedule(static) num_threads(NUM_THREADS)
     for (int i = 0; i < m_TrainingSize; ++i)
     {
-        float prediction = predict(m_TrainingData + i * m_NumFeatures);
+        double prediction = predict(m_TrainingData + i * m_NumFeatures);
         error += (prediction - m_TrainingLabels[i]) * (prediction - m_TrainingLabels[i]);
         m_LastPredictions[i] = prediction;
     }
     return error / m_TrainingSize;
 }
 
-float* LinearRegression::computeGradient()
+double* LinearRegression::computeGradient()
 {
-    float* gradient = new float[m_NumFeatures];
-    std::fill(gradient, gradient + m_NumFeatures, 0.0f);
+    double* gradient = new double[m_NumFeatures + 1];
+    std::fill(gradient, gradient + m_NumFeatures + 1, 0);
     
-    #pragma omp parallel num_threads(omp_get_max_threads())
+    int chunkSize = std::ceil(static_cast<double>(m_TrainingSize) / static_cast<double>(NUM_THREADS));
+
+    #pragma omp parallel num_threads(NUM_THREADS)
     {
         int id = omp_get_thread_num();
-        int numThreads = omp_get_num_threads();
-        int myStart = id * (m_TrainingSize / numThreads);
-        int myEnd = myStart + (m_TrainingSize / numThreads);
-        float* myGradient = new float[m_NumFeatures];
+        int myStart = id * chunkSize;
+        int myEnd = std::min(myStart + chunkSize, m_TrainingSize);
+        double* myGradient = new double[m_NumFeatures + 1];
+        std::fill(myGradient, myGradient + m_NumFeatures + 1, 0);
 
         for (int i = myStart; i < myEnd; ++i)
         {
+            double difference = m_LastPredictions[i] - m_TrainingLabels[i];
             for (int j = 0; j < m_NumFeatures; ++j)
             {
-                myGradient[j] += (m_LastPredictions[i] - m_TrainingLabels[i]) * m_TrainingData[i * m_NumFeatures + j];
+                myGradient[j] += difference * m_TrainingData[i * m_NumFeatures + j];
             }
+            myGradient[m_NumFeatures] += difference;
         }
         for (int j = 0; j < m_NumFeatures; ++j)
         {
             #pragma omp atomic update
             gradient[j] += myGradient[j];
         }
+        #pragma omp atomic update
+        gradient[m_NumFeatures] += myGradient[m_NumFeatures];
         delete[] myGradient;
     }
 
     for (int j = 0; j < m_NumFeatures; ++j)
     {
-        gradient[j] *= (2.0f / m_TrainingSize);
+        gradient[j] *= (double(2) / m_TrainingSize);
     }
+    gradient[m_NumFeatures] *= (double(2) / m_TrainingSize);
  
     return gradient;
 }

@@ -40,6 +40,8 @@ add_executable(test
         main.cpp
         LinearRegression.h
         LinearRegression.cu
+        PolynomialFeatures.h
+        PolynomialFeatures.cu
 )
 
 target_link_libraries(test OpenMP::OpenMP_CXX)
